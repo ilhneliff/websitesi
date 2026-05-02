@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Night Sky</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body,html{width:100%;background:#000}
+        canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:0}
+        .spacer{position:relative;z-index:1;height:200vh;pointer-events:none}
+
+        #popup{
+            display:none;position:fixed;z-index:100;
+            padding:28px 34px;
+            background:rgba(10,15,35,.75);
+            backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+            border:1px solid rgba(100,140,220,.2);
+            border-radius:18px;
+            box-shadow:0 12px 40px rgba(0,0,0,.5),0 0 60px rgba(80,120,200,.08) inset;
+            color:#d0daf0;font-family:'Segoe UI',Tahoma,sans-serif;
+            min-width:240px;
+            transform:scale(0);opacity:0;
+            transition:transform .35s cubic-bezier(.34,1.56,.64,1),opacity .3s ease;
+            pointer-events:auto;
+        }
+        #popup.show{display:block;transform:scale(1);opacity:1}
+        #popup h3{
+            font-size:1.15rem;font-weight:600;margin-bottom:10px;
+            color:#e8efff;letter-spacing:.5px;
+        }
+        #popup p{font-size:.85rem;color:#8899bb;line-height:1.7;margin-bottom:4px}
+        #popup .close-btn{
+            position:absolute;top:10px;right:14px;
+            background:none;border:none;color:#6678a0;font-size:1.1rem;
+            cursor:pointer;transition:color .2s;
+        }
+        #popup .close-btn:hover{color:#e0e8ff}
+        #popup .divider{
+            height:1px;background:rgba(100,140,220,.15);margin:12px 0;
+        }
+    </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="spacer"></div>
+
+<div id="popup">
+    <button class="close-btn" onclick="closePopup()">&times;</button>
+    <h3>Elif İlhanoğulları</h3>
+    <div class="divider"></div>
+    <p>Web Developer</p>
+    <p>GitHub: ilhneliff</p>
+</div>
+<script type="importmap">
+{
+  "imports":{
+    "three":"https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+    "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import*as THREE from'three';
+import{EffectComposer}from'three/addons/postprocessing/EffectComposer.js';
+import{RenderPass}from'three/addons/postprocessing/RenderPass.js';
+import{UnrealBloomPass}from'three/addons/postprocessing/UnrealBloomPass.js';
+import{ShaderPass}from'three/addons/postprocessing/ShaderPass.js';
+
+
+/* ========== RENDERER ========== */
+const canvas=document.getElementById('c');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.1;
+
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,0.1,500);
+camera.position.set(0,0,8);
+
+/* ========== SKY DOME ========== */
+const spaceTex=new THREE.TextureLoader().load("{{ url_for('static', filename='textures/space_real_2k.jpg') }}");
+spaceTex.colorSpace=THREE.SRGBColorSpace;
+
+const skyGeo=new THREE.SphereGeometry(200,64,64);
+const skyMat=new THREE.ShaderMaterial({
+  side:THREE.BackSide,
+  depthWrite:false,
+  uniforms:{u_tex:{value:spaceTex},u_day:{value:0}},
+  vertexShader:`
+    varying vec2 vUv;
+    varying vec3 vWorldPos;
+    void main(){
+      vUv=uv;
+      vWorldPos=position;
+      gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);
+    }`,
+  fragmentShader:`
+    uniform sampler2D u_tex;
+    uniform float u_day;
+    varying vec2 vUv;
+    varying vec3 vWorldPos;
+    void main(){
+      vec3 dir=normalize(vWorldPos);
+      // Night sky
+      vec3 night=texture2D(u_tex,vUv).rgb;
+      float moonAngle=max(0.0,dot(dir,vec3(0.0,0.15,1.0)));
+      night+=vec3(0.08,0.1,0.18)*pow(moonAngle,4.0)*0.12;
+      night+=vec3(0.06,0.08,0.14)*pow(max(0.0,dot(dir,normalize(vec3(0.0,0.1,1.0)))),2.0)*0.04;
+      // Dreamy morning sky gradient
+      float up=dir.y*0.5+0.5;
+      vec3 skyTop=vec3(0.42,0.68,0.92);
+      vec3 skyMid=vec3(0.62,0.58,0.82);
+      vec3 skyLow=vec3(0.85,0.65,0.72);
+      vec3 skyHorizon=vec3(0.95,0.82,0.65);
+      vec3 day;
+      if(up>0.65) day=mix(skyMid,skyTop,smoothstep(0.65,0.95,up));
+      else if(up>0.45) day=mix(skyLow,skyMid,smoothstep(0.45,0.65,up));
+      else day=mix(skyHorizon,skyLow,smoothstep(0.25,0.45,up));
+      // Sun glow
+      vec3 sunDir=normalize(vec3(0.0,0.15,1.0));
+      float sunDot=max(0.0,dot(dir,sunDir));
+      day+=vec3(1.0,0.99,0.95)*pow(sunDot,80.0)*0.5;
+      day+=vec3(1.0,0.95,0.85)*pow(sunDot,20.0)*0.25;
+      day+=vec3(1.0,0.88,0.7)*pow(sunDot,6.0)*0.12;
+      day+=vec3(0.9,0.75,0.6)*pow(sunDot,2.5)*0.06;
+      // Sun rays
+      float angle=atan(dir.x-sunDir.x, dir.z-sunDir.z);
+      float rayNoise=0.5+0.5*sin(angle*8.0)+0.3*sin(angle*17.0+1.5)+0.2*sin(angle*31.0+3.0);
+      float rayMask=pow(sunDot,3.0)*rayNoise*0.08;
+      day+=vec3(1.0,0.92,0.78)*rayMask;
+      gl_FragColor=vec4(mix(night,day,u_day),1.);
+    }`
+});
+scene.add(new THREE.Mesh(skyGeo,skyMat));
+
+/* ========== STARS ========== */
+const STAR_COUNT=3000;
+const sPos=new Float32Array(STAR_COUNT*3);
+const sSiz=new Float32Array(STAR_COUNT);
+const sOff=new Float32Array(STAR_COUNT);
+for(let i=0;i<STAR_COUNT;i++){
+  const theta=Math.random()*Math.PI*2;
+  const phi=Math.acos(2*Math.random()-1);
+  const r=80+Math.random()*100;
+  sPos[i*3]=r*Math.sin(phi)*Math.cos(theta);
+  sPos[i*3+1]=r*Math.sin(phi)*Math.sin(theta);
+  sPos[i*3+2]=r*Math.cos(phi);
+  sSiz[i]=Math.random()<0.05 ? 4+Math.random()*4 : Math.random()*3+0.5;
+  sOff[i]=Math.random()*6.28;
+}
+
+// Sağ üst köşeye sabit, büyük, parlak yıldız (tıklanabilir)
+const specialStarGroup=new THREE.Group();
+scene.add(specialStarGroup);
+
+const specialStarTex=(()=>{
+  const cv=document.createElement('canvas');cv.width=cv.height=256;
+  const cx=cv.getContext('2d');
+  const g=cx.createRadialGradient(128,128,0,128,128,128);
+  g.addColorStop(0,'rgba(255,255,255,1)');
+  g.addColorStop(0.05,'rgba(240,245,255,0.95)');
+  g.addColorStop(0.15,'rgba(200,220,255,0.6)');
+  g.addColorStop(0.35,'rgba(150,185,255,0.2)');
+  g.addColorStop(0.6,'rgba(120,160,240,0.05)');
+  g.addColorStop(1,'rgba(100,140,220,0)');
+  cx.fillStyle=g;cx.fillRect(0,0,256,256);
+  cx.globalAlpha=0.4;
+  cx.strokeStyle='rgba(200,220,255,0.6)';
+  cx.lineWidth=1.5;
+  cx.beginPath();cx.moveTo(128-60,128);cx.lineTo(128+60,128);cx.stroke();
+  cx.beginPath();cx.moveTo(128,128-60);cx.lineTo(128,128+60);cx.stroke();
+  cx.globalAlpha=0.2;
+  cx.lineWidth=1;
+  cx.beginPath();cx.moveTo(128-40,128-40);cx.lineTo(128+40,128+40);cx.stroke();
+  cx.beginPath();cx.moveTo(128+40,128-40);cx.lineTo(128-40,128+40);cx.stroke();
+  return new THREE.CanvasTexture(cv);
+})();
+
+const specialSprite=new THREE.Sprite(new THREE.SpriteMaterial({
+  map:specialStarTex,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,
+  opacity:0.5
+}));
+specialSprite.scale.set(1.5,1.5,1);
+specialStarGroup.add(specialSprite);
+
+specialStarGroup.position.set(5.5,3.2,-8);
+
+const bigStarGeo=new THREE.SphereGeometry(1.2,8,8);
+const bigStarMat=new THREE.MeshBasicMaterial({visible:false});
+const bigStarMesh=new THREE.Mesh(bigStarGeo,bigStarMat);
+bigStarMesh.position.copy(specialStarGroup.position);
+scene.add(bigStarMesh);
+
+const sGeo=new THREE.BufferGeometry();
+sGeo.setAttribute('position',new THREE.BufferAttribute(sPos,3));
+sGeo.setAttribute('size',new THREE.BufferAttribute(sSiz,1));
+sGeo.setAttribute('offset',new THREE.BufferAttribute(sOff,1));
+
+const starTexLoader=new THREE.TextureLoader();
+const starTex=starTexLoader.load("{{ url_for('static', filename='textures/star_soft.png') }}");
+
+const sMat=new THREE.ShaderMaterial({
+  transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,
+  uniforms:{u_time:{value:0},u_tex:{value:starTex},u_fade:{value:1}},
+  vertexShader:`
+    attribute float size;
+    attribute float offset;
+    varying float vAlpha;
+    varying float vSize;
+    uniform float u_time;
+    void main(){
+      vec4 mv=modelViewMatrix*vec4(position,1.);
+      float twinkle=0.45+0.55*sin(u_time*(0.3+size*0.15)+offset);
+      vAlpha=twinkle;
+      vSize=size;
+      gl_PointSize=size*(280.0/(-mv.z));
+      gl_Position=projectionMatrix*mv;
+    }`,
+  fragmentShader:`
+    uniform sampler2D u_tex;
+    uniform float u_fade;
+    varying float vAlpha;
+    varying float vSize;
+    void main(){
+      vec4 texColor=texture2D(u_tex,gl_PointCoord);
+      vec3 col=mix(vec3(0.75,0.82,1.0),vec3(1.0,0.95,0.85),vSize/3.5);
+      gl_FragColor=vec4(col*texColor.rgb,texColor.a*vAlpha*u_fade);
+    }`
+});
+scene.add(new THREE.Points(sGeo,sMat));
+
+// Bright flare stars
+const flareTex=starTexLoader.load("{{ url_for('static', filename='textures/star_flare.png') }}");
+const FLARE_COUNT=25;
+const flareGeo=new THREE.BufferGeometry();
+const flarePos=new Float32Array(FLARE_COUNT*3);
+const flareSiz=new Float32Array(FLARE_COUNT);
+const flareOff=new Float32Array(FLARE_COUNT);
+for(let i=0;i<FLARE_COUNT;i++){
+  const theta=Math.random()*Math.PI*2;
+  const phi=Math.acos(2*Math.random()-1);
+  const r=85+Math.random()*80;
+  flarePos[i*3]=r*Math.sin(phi)*Math.cos(theta);
+  flarePos[i*3+1]=r*Math.sin(phi)*Math.sin(theta);
+  flarePos[i*3+2]=r*Math.cos(phi);
+  flareSiz[i]=4+Math.random()*5;
+  flareOff[i]=Math.random()*6.28;
+}
+flareGeo.setAttribute('position',new THREE.BufferAttribute(flarePos,3));
+flareGeo.setAttribute('size',new THREE.BufferAttribute(flareSiz,1));
+flareGeo.setAttribute('offset',new THREE.BufferAttribute(flareOff,1));
+
+const flareMat=new THREE.ShaderMaterial({
+  transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,
+  uniforms:{u_time:{value:0},u_tex:{value:flareTex},u_fade:{value:1}},
+  vertexShader:`
+    attribute float size;
+    attribute float offset;
+    varying float vAlpha;
+    uniform float u_time;
+    void main(){
+      vec4 mv=modelViewMatrix*vec4(position,1.);
+      float twinkle=0.3+0.7*sin(u_time*0.4+offset);
+      vAlpha=twinkle;
+      gl_PointSize=size*(300.0/(-mv.z));
+      gl_Position=projectionMatrix*mv;
+    }`,
+  fragmentShader:`
+    uniform sampler2D u_tex;
+    uniform float u_fade;
+    varying float vAlpha;
+    void main(){
+      vec4 t=texture2D(u_tex,gl_PointCoord);
+      gl_FragColor=vec4(t.rgb*vec3(0.85,0.9,1.0),t.a*vAlpha*0.7*u_fade);
+    }`
+});
+scene.add(new THREE.Points(flareGeo,flareMat));
+
+/* ========== MOON TEXTURE (real NASA/Solar System Scope) ========== */
+const texLoader=new THREE.TextureLoader();
+const moonTex=texLoader.load("{{ url_for('static', filename='textures/moon_map.jpg') }}");
+moonTex.colorSpace=THREE.SRGBColorSpace;
+moonTex.anisotropy=renderer.capabilities.getMaxAnisotropy();
+const moonNorm=texLoader.load("{{ url_for('static', filename='textures/moon_normal.jpg') }}");
+
+/* ========== MOON MESH ========== */
+const moonGeo=new THREE.SphereGeometry(1.6,128,128);
+const moonBump=texLoader.load("{{ url_for('static', filename='textures/moon_map.jpg') }}");
+const moonMat=new THREE.MeshStandardMaterial({
+  map:moonTex,
+  normalMap:moonNorm,
+  normalScale:new THREE.Vector2(.4,.4),
+  bumpMap:moonBump,
+  bumpScale:.015,
+  roughness:.85,
+  metalness:0,
+  emissive:new THREE.Color(0x889abb),
+  emissiveIntensity:.1,
+});
+const moon=new THREE.Mesh(moonGeo,moonMat);
+moon.position.set(0,0.2,0);
+scene.add(moon);
+
+/* ========== LIGHTING ========== */
+const front=new THREE.DirectionalLight(0xdde5ff,3);
+front.position.set(0,0.5,5);
+scene.add(front);
+
+const back=new THREE.DirectionalLight(0x99aadd,2.5);
+back.position.set(-1.5,1.5,-3);
+scene.add(back);
+
+const fill=new THREE.DirectionalLight(0xaabbdd,1.2);
+fill.position.set(3,0.5,3);
+scene.add(fill);
+
+const rim=new THREE.DirectionalLight(0xbbccee,1.8);
+rim.position.set(0,2,-2);
+scene.add(rim);
+
+scene.add(new THREE.AmbientLight(0x334466,0.5));
+
+/* ========== MOON GLOW (using real texture) ========== */
+const glowTex=new THREE.TextureLoader().load("{{ url_for('static', filename='textures/moon_glow.png') }}");
+
+function makeGlow(scale,opacity,zOff){
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({
+    map:glowTex,transparent:true,opacity:opacity,
+    blending:THREE.AdditiveBlending,depthWrite:false
+  }));
+  sp.scale.set(scale,scale,1);
+  sp.position.set(0,0.2,zOff);
+  scene.add(sp);
+  return sp;
+}
+
+const glow0=makeGlow(14,.12,-.7);
+const glow1=makeGlow(9,.2,-.5);
+const glow2=makeGlow(5.5,.3,-.3);
+const glow3=makeGlow(3.5,.25,-.2);
+
+/* ========== SUN DISC (light source for god rays) ========== */
+const sunWorldPos=new THREE.Vector3(0,3,-15);
+const sunGlowTex=new THREE.TextureLoader().load("{{ url_for('static', filename='textures/sunrise_glow.png') }}");
+const sunSprite=new THREE.Sprite(new THREE.SpriteMaterial({
+  map:sunGlowTex,transparent:true,opacity:0,
+  blending:THREE.AdditiveBlending,depthWrite:false,
+}));
+sunSprite.scale.set(12,12,1);
+sunSprite.position.copy(sunWorldPos);
+sunSprite.renderOrder=0;
+scene.add(sunSprite);
+
+/* ========== POST-PROCESSING ========== */
+const composer=new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene,camera));
+
+// Bloom
+const bloom=new UnrealBloomPass(
+  new THREE.Vector2(innerWidth,innerHeight),
+  0.4,   // strength
+  0.8,   // radius
+  0.35   // threshold
+);
+composer.addPass(bloom);
+
+// God rays pass (screen-space volumetric light scattering)
+const godRayShader={
+  uniforms:{
+    tDiffuse:{value:null},
+    u_lightPos:{value:new THREE.Vector2(0.5,0.5)},
+    u_exposure:{value:0.1},
+    u_decay:{value:0.96},
+    u_density:{value:0.7},
+    u_weight:{value:0.06},
+    u_intensity:{value:0},
+  },
+  vertexShader:`varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+  fragmentShader:`
+    uniform sampler2D tDiffuse;
+    uniform vec2 u_lightPos;
+    uniform float u_exposure;
+    uniform float u_decay;
+    uniform float u_density;
+    uniform float u_weight;
+    uniform float u_intensity;
+    varying vec2 vUv;
+    void main(){
+      vec4 orig=texture2D(tDiffuse,vUv);
+      if(u_intensity<0.01){gl_FragColor=orig;return;}
+      vec2 delta=vUv-u_lightPos;
+      float dist=length(delta);
+      delta*=u_density/80.0;
+      vec2 uv=vUv;
+      float illum=0.0;
+      float decay=1.0;
+      for(int i=0;i<80;i++){
+        uv-=delta;
+        vec3 s=texture2D(tDiffuse,clamp(uv,0.0,1.0)).rgb;
+        float lum=dot(s,vec3(0.2126,0.7152,0.0722));
+        illum+=lum*decay*u_weight;
+        decay*=u_decay;
+      }
+      float falloff=1.0-smoothstep(0.0,1.2,dist);
+      vec3 rays=vec3(1.0,0.9,0.82)*illum*u_exposure*falloff*u_intensity;
+      gl_FragColor=vec4(orig.rgb+rays,orig.a);
+    }`
+};
+const godRayPass=new ShaderPass(godRayShader);
+composer.addPass(godRayPass);
+
+// Vignette pass
+const vignetteShader={
+  uniforms:{tDiffuse:{value:null}},
+  vertexShader:`varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
+  fragmentShader:`
+    uniform sampler2D tDiffuse;
+    varying vec2 vUv;
+    void main(){
+      vec4 c=texture2D(tDiffuse,vUv);
+      float d=length(vUv-0.5)*1.4;
+      float vig=1.0-smoothstep(0.4,1.3,d);
+      c.rgb*=0.7+0.3*vig;
+      gl_FragColor=c;
+    }`
+};
+composer.addPass(new ShaderPass(vignetteShader));
+
+/* ========== RESIZE ========== */
+window.addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+  composer.setSize(innerWidth,innerHeight);
+});
+
+/* ========== MOUSE PARALLAX ========== */
+let mx=0,my=0,smx=0,smy=0;
+document.addEventListener('mousemove',e=>{
+  mx=(e.clientX/innerWidth-0.5)*2;
+  my=(e.clientY/innerHeight-0.5)*2;
+});
+
+/* ========== MOON DRAG ROTATION ========== */
+const raycaster=new THREE.Raycaster();
+const pointer=new THREE.Vector2();
+let isDragging=false;
+let prevDragX=0, prevDragY=0;
+let dragVelX=0, dragVelY=0;
+let moonRotX=0, moonRotY=0;
+
+// Popup logic
+const popup=document.getElementById('popup');
+let popupOpen=false;
+
+function openPopup(screenX,screenY){
+  let px=screenX+15, py=screenY-20;
+  if(px+260>innerWidth) px=screenX-270;
+  if(py+180>innerHeight) py=innerHeight-190;
+  if(py<10) py=10;
+  popup.style.left=px+'px';
+  popup.style.top=py+'px';
+  popup.style.display='block';
+  requestAnimationFrame(()=>popup.classList.add('show'));
+  popupOpen=true;
+}
+window.closePopup=function(){
+  popup.classList.remove('show');
+  setTimeout(()=>{popup.style.display='none';popupOpen=false;},300);
+};
+
+canvas.addEventListener('pointerdown',e=>{
+  pointer.x=(e.clientX/innerWidth)*2-1;
+  pointer.y=-(e.clientY/innerHeight)*2+1;
+  raycaster.setFromCamera(pointer,camera);
+
+  const starHits=raycaster.intersectObject(bigStarMesh);
+  if(starHits.length>0){
+    if(popupOpen) closePopup(); else openPopup(e.clientX,e.clientY);
+    return;
+  }
+
+  if(popupOpen){closePopup();}
+
+  const moonHits=raycaster.intersectObject(moon);
+  if(moonHits.length>0){
+    isDragging=true;
+    prevDragX=e.clientX;
+    prevDragY=e.clientY;
+    dragVelX=0; dragVelY=0;
+    canvas.style.cursor='grabbing';
+    return;
+  }
+
+});
+
+canvas.addEventListener('pointermove',e=>{
+  if(isDragging){
+    const dx=e.clientX-prevDragX;
+    const dy=e.clientY-prevDragY;
+    dragVelX=dx*0.005;
+    dragVelY=dy*0.005;
+    moonRotY+=dragVelX;
+    moonRotX+=dragVelY;
+    prevDragX=e.clientX;
+    prevDragY=e.clientY;
+  }
+});
+
+canvas.addEventListener('pointerup',()=>{
+  isDragging=false;
+  canvas.style.cursor='default';
+});
+canvas.addEventListener('pointerleave',()=>{
+  isDragging=false;
+  canvas.style.cursor='default';
+});
+
+// Hover cursor
+canvas.addEventListener('mousemove',e=>{
+  if(isDragging)return;
+  pointer.x=(e.clientX/innerWidth)*2-1;
+  pointer.y=-(e.clientY/innerHeight)*2+1;
+  raycaster.setFromCamera(pointer,camera);
+  const starHit=raycaster.intersectObject(bigStarMesh);
+  if(starHit.length>0){canvas.style.cursor='pointer';return;}
+  const mHit=raycaster.intersectObject(moon);
+  if(mHit.length>0){canvas.style.cursor='grab';return;}
+  canvas.style.cursor='default';
+});
+
+// Scroll tracking with smooth interpolation
+let scrollTarget=0;
+let scrollSmooth=0;
+window.addEventListener('scroll',()=>{
+  scrollTarget=window.scrollY/(document.body.scrollHeight-innerHeight);
+});
+
+/* ========== ANIMATION ========== */
+const clock=new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  const t=clock.getElapsedTime();
+
+  // Smooth mouse parallax
+  smx+=(mx-smx)*0.03;
+  smy+=(my-smy)*0.03;
+
+  // Camera parallax
+  camera.position.x=smx*0.3;
+  camera.position.y=smy*0.15+0.1;
+  camera.lookAt(0,0.2,0);
+
+  // Smooth scroll interpolation
+  scrollSmooth+=(scrollTarget-scrollSmooth)*0.06;
+  const s=scrollSmooth;
+  const moonFade=1-Math.max(0,Math.min(1,(s-0.2)/0.3));
+
+  // Day transition (scroll-driven)
+  const dayAmount=Math.max(0,Math.min(1,(s-0.15)/0.5));
+  skyMat.uniforms.u_day.value=dayAmount;
+  const nightAlpha=1-dayAmount;
+
+  // Moon
+  moon.position.y=0.2+Math.sin(t*0.25)*0.06-s*10;
+  moon.visible=moonFade>0.01;
+  moon.material.opacity=moonFade;
+  moon.material.transparent=true;
+  glow0.position.y=moon.position.y;glow0.visible=moon.visible;
+  glow1.position.y=moon.position.y;glow1.visible=moon.visible;
+  glow2.position.y=moon.position.y;glow2.visible=moon.visible;
+  glow3.position.y=moon.position.y;glow3.visible=moon.visible;
+  const p=1+Math.sin(t*0.4)*0.02;
+  const p2=1+Math.sin(t*0.3+1)*0.015;
+  const glowFade=moonFade*nightAlpha;
+  glow0.scale.set(12*p2*glowFade,12*p2*glowFade,1);
+  glow1.scale.set(8*p*glowFade,8*p*glowFade,1);
+  if(!isDragging){dragVelX*=0.96;dragVelY*=0.96;moonRotY+=dragVelX;moonRotX+=dragVelY;}
+  moon.rotation.y=t*0.008+moonRotY;
+  moon.rotation.x=moonRotX;
+
+  // Sun sprite — fade in with day
+  sunSprite.material.opacity=dayAmount*0.3;
+  sunSprite.visible=dayAmount>0.01;
+  const sunPulse=1+Math.sin(t*0.3)*0.05;
+  sunSprite.scale.set(12*sunPulse,12*sunPulse,1);
+
+  // God rays — project sun to screen, drive intensity
+  const sunScreen=sunWorldPos.clone().project(camera);
+  godRayPass.uniforms.u_lightPos.value.set(sunScreen.x*0.5+0.5,sunScreen.y*0.5+0.5);
+  godRayPass.uniforms.u_intensity.value=dayAmount;
+
+  // Stars — fade out during day
+  sMat.uniforms.u_time.value=t;
+  sMat.uniforms.u_fade.value=nightAlpha;
+  flareMat.uniforms.u_time.value=t;
+  flareMat.uniforms.u_fade.value=nightAlpha;
+  const sp=1.3+Math.sin(t*1.5)*0.15;
+  specialSprite.scale.set(sp*nightAlpha,sp*nightAlpha,1);
+  specialSprite.material.opacity=0.5*nightAlpha;
+
+  // Reduce bloom + exposure during day to prevent overbrightness
+  bloom.strength=0.4*(1-dayAmount*0.85);
+  renderer.toneMappingExposure=1.1-dayAmount*0.3;
+
+  composer.render();
+}
+animate();
+
+</script>
+</body>
+</html>
